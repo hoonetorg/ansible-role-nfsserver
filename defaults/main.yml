@@ -1,0 +1,20 @@
+---
+# Merged (recursively) with the inventory variable `nfsserver` into `nfsserver_final`.
+nfsserver_defaults:
+  # install and configure the NFS server (false: the role does nothing)
+  install: false
+  packages: [nfs-kernel-server]
+
+  # exports, see README.md; written to /etc/exports.d/ansible.exports (exactly these)
+  exports: []
+
+  # NFSv4 only (NFSv2/v3 off): NFS3_SERVER_SUPPORT="no" in /etc/sysconfig/nfs
+  nfsv4_only: true
+
+  # firewalld (if running): these services in these zones; zone libvirt exists once libvirt is installed
+  # (ansible-role-virt runs before this role); NFSv4 only needs service nfs (2049/tcp)
+  firewalld_zones: [libvirt]
+  firewalld_services: [nfs]
+
+  # SELinux (if enabled): booleans ensured on (on by default on Leap 16)
+  selinux_booleans: [nfs_export_all_rw, nfs_export_all_ro]

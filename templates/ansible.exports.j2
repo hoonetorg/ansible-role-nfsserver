@@ -1,0 +1,6 @@
+# {{ ansible_managed }}
+# exports of ansible-role-nfsserver (nfsserver.exports); other files in /etc/exports.d are not touched
+{% for export in nfsserver_final.exports %}
+{{ export.path }} {% for client in export.clients %}{{ client.host }}({{ client.options }}){{ ' ' if not loop.last }}{% endfor %}
+
+{% endfor %}

@@ -1,0 +1,4 @@
+---
+nfsserver_exports_file: /etc/exports.d/ansible.exports
+nfsserver_sysconfig: /etc/sysconfig/nfs
+nfsserver_service: nfs-server.service

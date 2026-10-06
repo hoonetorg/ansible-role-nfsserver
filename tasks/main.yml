@@ -1,0 +1,148 @@
+---
+- name: Build final nfsserver configuration
+  ansible.builtin.set_fact:
+    nfsserver_final: "{{ nfsserver_defaults | combine(nfsserver | default({}), recursive=True) }}"
+
+- name: NFS server
+  when: nfsserver_final.install
+  block:
+    - name: Only openSUSE is supported
+      ansible.builtin.assert:
+        that: ansible_os_family == 'Suse'
+        fail_msg: "nfsserver: only openSUSE is implemented, not {{ ansible_distribution }}"
+        quiet: true
+
+    - name: Assert exports
+      ansible.builtin.assert:
+        that:
+          - item.path | default('') is match('/')
+          - item.clients | default([]) | length > 0
+          - item.clients | map(attribute='host') | select | list | length == item.clients | length
+          - item.clients | map(attribute='options') | select | list | length == item.clients | length
+        fail_msg: "nfsserver: export {{ item.path | default('?') }} needs an absolute path and clients with host and options"
+        quiet: true
+      loop: "{{ nfsserver_final.exports }}"
+      loop_control:
+        label: "{{ item.path | default('?') }}"
+
+    - name: Assert unique export paths
+      ansible.builtin.assert:
+        that: paths | unique | length == paths | length
+        fail_msg: "nfsserver: export paths must be unique ({{ paths }})"
+        quiet: true
+      vars:
+        paths: "{{ nfsserver_final.exports | map(attribute='path') | list }}"
+
+    - name: Install NFS server
+      ansible.builtin.package:
+        name: "{{ nfsserver_final.packages }}"
+        state: present
+
+    - name: Look up export paths
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      loop: "{{ nfsserver_final.exports }}"
+      loop_control:
+        label: "{{ item.path }}"
+      register: nfsserver_paths
+
+    # a missing path usually means the wrong host or a typo: stop instead of exporting an empty directory
+    - name: Assert export paths exist
+      ansible.builtin.assert:
+        that: item.stat.isdir | default(false) or item.item.create | default(false) | bool
+        fail_msg: >-
+          nfsserver: {{ item.item.path }} does not exist or is not a directory (set create: true on the export
+          to create it)
+        quiet: true
+      loop: "{{ nfsserver_paths.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+
+    - name: Create export paths (create true)
+      ansible.builtin.file:
+        path: "{{ item.item.path }}"
+        state: directory
+        mode: "0755"
+      loop: "{{ nfsserver_paths.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+      when: not item.stat.exists and item.item.create | default(false) | bool
+
+    # SUSE: /usr/etc/nfs.conf takes "[nfsd] vers3" from NFS3_SERVER_SUPPORT in /etc/sysconfig/nfs
+    - name: NFSv4 only (NFSv2/v3 off)
+      ansible.builtin.lineinfile:
+        path: "{{ nfsserver_sysconfig }}"
+        regexp: '^NFS3_SERVER_SUPPORT='
+        line: 'NFS3_SERVER_SUPPORT="{{ "no" if nfsserver_final.nfsv4_only else "yes" }}"'
+      notify: nfsserver restart
+
+    - name: Write exports
+      ansible.builtin.template:
+        src: ansible.exports.j2
+        dest: "{{ nfsserver_exports_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: nfsserver exportfs
+
+    - name: Enable and start NFS server
+      ansible.builtin.systemd_service:
+        name: "{{ nfsserver_service }}"
+        enabled: true
+        state: started
+      when: not ansible_check_mode
+
+    - name: Flush handlers (restart, exportfs)
+      ansible.builtin.meta: flush_handlers
+
+    - name: Gather service facts
+      ansible.builtin.service_facts:
+
+    - name: Firewalld
+      when: ansible_facts.services['firewalld.service'].state | default('') == 'running'
+      block:
+        - name: Read firewalld zones
+          ansible.builtin.command: firewall-cmd --permanent --get-zones
+          register: nfsserver_zones
+          changed_when: false
+          check_mode: false
+
+        - name: Assert firewalld zones exist
+          ansible.builtin.assert:
+            that: nfsserver_final.firewalld_zones | difference(nfsserver_zones.stdout.split()) | length == 0
+            fail_msg: >-
+              nfsserver: firewalld zone(s) {{ nfsserver_final.firewalld_zones | difference(nfsserver_zones.stdout.split()) }}
+              missing (zone libvirt comes with libvirt: run ansible-role-virt first)
+            quiet: true
+
+        - name: Open firewalld services
+          ansible.posix.firewalld:
+            zone: "{{ item.0 }}"
+            service: "{{ item.1 }}"
+            permanent: true
+            immediate: true
+            state: enabled
+          loop: "{{ nfsserver_final.firewalld_zones | product(nfsserver_final.firewalld_services) | list }}"
+
+    - name: Detect SELinux
+      ansible.builtin.stat:
+        path: /sys/fs/selinux/enforce
+      register: nfsserver_selinux
+
+    - name: SELinux booleans
+      when: nfsserver_selinux.stat.exists
+      block:
+        - name: Read SELinux booleans
+          ansible.builtin.command:
+            argv: "{{ ['getsebool'] + nfsserver_final.selinux_booleans }}"
+          register: nfsserver_booleans
+          changed_when: false
+          check_mode: false
+          when: nfsserver_final.selinux_booleans | length > 0
+
+        - name: Set SELinux booleans on
+          ansible.builtin.command:
+            argv: [setsebool, -P, "{{ item }}", "on"]
+          loop: "{{ nfsserver_final.selinux_booleans }}"
+          changed_when: true
+          when: nfsserver_booleans.stdout is not search('(?m)^' ~ item ~ ' --> on$')
