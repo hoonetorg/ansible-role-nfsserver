@@ -95,35 +95,6 @@
     - name: Flush handlers (restart, exportfs)
       ansible.builtin.meta: flush_handlers
 
-    - name: Gather service facts
-      ansible.builtin.service_facts:
-
-    - name: Firewalld
-      when: ansible_facts.services['firewalld.service'].state | default('') == 'running'
-      block:
-        - name: Read firewalld zones
-          ansible.builtin.command: firewall-cmd --permanent --get-zones
-          register: nfsserver_zones
-          changed_when: false
-          check_mode: false
-
-        - name: Assert firewalld zones exist
-          ansible.builtin.assert:
-            that: nfsserver_final.firewalld_zones | difference(nfsserver_zones.stdout.split()) | length == 0
-            fail_msg: >-
-              nfsserver: firewalld zone(s) {{ nfsserver_final.firewalld_zones | difference(nfsserver_zones.stdout.split()) }}
-              missing (zone libvirt comes with libvirt: run ansible-role-virt first)
-            quiet: true
-
-        - name: Open firewalld services
-          ansible.posix.firewalld:
-            zone: "{{ item.0 }}"
-            service: "{{ item.1 }}"
-            permanent: true
-            immediate: true
-            state: enabled
-          loop: "{{ nfsserver_final.firewalld_zones | product(nfsserver_final.firewalld_services) | list }}"
-
     - name: Detect SELinux
       ansible.builtin.stat:
         path: /sys/fs/selinux/enforce

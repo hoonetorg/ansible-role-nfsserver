@@ -1,7 +1,8 @@
 # ansible-role-nfsserver
 
-NFSv4 server on openSUSE Leap: exports from the inventory, NFSv2/v3 switched off, firewalld service `nfs` in the
-listed zones (default: `libvirt`, the zone of the libvirt bridges), SELinux export booleans ensured on.
+NFSv4 server on openSUSE Leap: exports from the inventory, NFSv2/v3 switched off, SELinux export booleans ensured
+on. The firewall is not touched: open firewalld service `nfs` (2049/tcp, NFSv4 only needs this) in zone `libvirt`
+(the zone of the libvirt bridges) with ansible-role-network.
 Typical use: a KVM host exports directories to its guests, e.g. the host's `/home/jd` to a guest's `/home/jd`.
 
 1. installs `nfs-kernel-server`
@@ -11,10 +12,7 @@ Typical use: a KVM host exports directories to its guests, e.g. the host's `/hom
 4. writes `/etc/exports.d/ansible.exports` (exactly the listed exports; other files in `/etc/exports.d` are not
    touched) → `exportfs -ra`
 5. enables and starts `nfs-server.service`
-6. firewalld (if running): every service of `firewalld_services` in every zone of `firewalld_zones`, permanent
-   and immediate; a missing zone stops the run (zone `libvirt` exists once libvirt is installed - run
-   ansible-role-virt first)
-7. SELinux (if enabled): `setsebool -P <boolean> on` only for booleans that are off
+6. SELinux (if enabled): `setsebool -P <boolean> on` only for booleans that are off
 
 Only openSUSE is implemented. With `install: false` (default) the role does nothing.
 
@@ -30,8 +28,6 @@ nfsserver:
           options: rw,sync,no_subtree_check,no_root_squash,security_label
       # create: true                 # create a missing path (default: a missing path stops the run)
   # nfsv4_only: true                 # default
-  # firewalld_zones: [libvirt]       # default
-  # firewalld_services: [nfs]        # default; NFSv4 only needs 2049/tcp
   # selinux_booleans: [nfs_export_all_rw, nfs_export_all_ro]   # default
 ```
 
@@ -48,7 +44,7 @@ on the host and in the guest).
 ```bash
 cat /proc/fs/nfsd/versions                 # -3 +4 +4.1 +4.2
 exportfs -v                                # the exports with their effective options
-firewall-cmd --zone=libvirt --list-services    # contains nfs
+firewall-cmd --zone=libvirt --list-services    # contains nfs (ansible-role-network)
 getsebool nfs_export_all_rw nfs_export_all_ro  # on
 # in the guest:
 mount -t nfs4 <host address on the bridge>:/home/jd /mnt && ls /mnt && umount /mnt
